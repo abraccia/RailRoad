@@ -5,7 +5,7 @@ import shlex
 import os
 
 SERVER = "192.168.193.113"
-PORT = 4444
+PORT = 6769
 END_MARKER = b"\n--END--\n"
 
 def run_cmd(cmd):
