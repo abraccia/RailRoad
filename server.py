@@ -8,7 +8,7 @@ import socket
 #PORT = input("Enter your target Port: ")
 
 HOST = "0.0.0.0" 
-PORT = 65432
+PORT = 4444
 print("Trying to connect to client...")
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.bind((HOST, PORT))
