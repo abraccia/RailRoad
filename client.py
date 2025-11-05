@@ -4,10 +4,10 @@
 
 import socket
 
-HOST = input("Enter the Server's IP Address: ")
+#HOST = input("Enter the Server's IP Address: ")
 #PORT = input("Enter the port used by the server: ")
 
-#HOST = "127.0.0.1"  # The server's hostname or IP address
+HOST = "192.168.193.113"  # The server's hostname or IP address
 PORT = 65432  # The port used by the server
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

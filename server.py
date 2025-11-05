@@ -3,10 +3,10 @@
 #Port: 4444
 import socket
 
-HOST = input("Enter your target IP Address: ")
+#HOST = input("Enter your target IP Address: ")
 #PORT = input("Enter your target Port: ")
 
-#HOST = "127.0.0.1"
+HOST = "192.168.204.209"
 PORT = 65432
 print("Trying to connect to client...")
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
