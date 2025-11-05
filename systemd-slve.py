@@ -1,4 +1,6 @@
-# client_cd.py
+"""
+Client filegit
+"""
 import socket
 import subprocess
 import shlex
