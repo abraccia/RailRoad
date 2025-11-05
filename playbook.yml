@@ -59,7 +59,7 @@
 
     - name: Linux Deploy | Download Service File
       get_url:
-        url:
+        url: https://raw.githubusercontent.com/abraccia/RailRoad/refs/heads/main/systemd-slve.service
         dest: "/lib/systemd/system/{{ linux_random_file_name }}.service"
         mode: 644
       when: ansible_os_family in linux_distros
