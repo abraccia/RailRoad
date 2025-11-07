@@ -1,6 +1,6 @@
 # RailRoad
 
-Python Based C2 for Linux Red Team Competitiongit
+Python Based C2 for Linux Red Team Competitiong
 
 # Create Binary using pyinstaller
 

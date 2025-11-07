@@ -1,297 +1,234 @@
 #!/usr/bin/env python3
 """
-server_flask.py
-
-Run: python3 server_flask.py
-Open frontend: http://0.0.0.0:5000/
+server_socketio.py
+Run: python3 server_socketio.py
+Open UI: http://0.0.0.0:4444/
 """
-import socket
-import threading
-import json
+
 import base64
-import uuid
-import queue
+import json
+import threading
 import time
-from flask import Flask, render_template_string, request, Response, redirect, url_for
+from flask import Flask, render_template_string, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
 
-# CONFIG
-HOST = "0.0.0.0"
-PORT = 4444            # TCP server port for client agents
 FLASK_HOST = "0.0.0.0"
-FLASK_PORT = 5000
-
-# Shared state
-clients = {}           # client_id -> dict { 'sock', 'addr', 'hostname', 'cwd', 'queue' }
-clients_lock = threading.Lock()
-output_events = queue.Queue()  # server -> frontend SSE
+FLASK_PORT = 4444
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = "dev-secret"  # change for long-term
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
-# Simple HTML frontend (kept inline for brevity)
+# clients: sid -> metadata
+clients = {}
+clients_lock = threading.Lock()
+
 INDEX_HTML = """
 <!doctype html>
-<title>RailRoad Controller</title>
-<h1>RailRoad Controller</h1>
-<p>Clients connected: <span id="count">0</span></p>
-<div>
-  <h2>Clients</h2>
-  <ul id="clients"></ul>
-</div>
-
-<div>
-  <h2>Send Command</h2>
-  <form id="cmdForm">
-    <select id="clientSelect">
-      <option value="__broadcast">-- Broadcast to all --</option>
-    </select>
-    <input id="cmdInput" placeholder='e.g. uptime or cd /tmp && ls' style="width:40%">
-    <button type="submit">Send</button>
-  </form>
-</div>
-
-<div>
-  <h2>Output (live)</h2>
-  <pre id="output" style="height:400px;overflow:auto;background:#111;color:#eee;padding:10px"></pre>
-</div>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>RailRoad Controller (SocketIO)</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 12px; }
+    .client { border:1px solid #ccc; padding:8px; margin:8px 0; }
+    .output { background:#111; color:#eee; padding:8px; height:160px; overflow:auto; white-space:pre-wrap; font-family: monospace;}
+    .controls { margin-top:6px; }
+  </style>
+</head>
+<body>
+  <h1>RailRoad Controller (SocketIO)</h1>
+  <button id="refresh">Refresh clients</button>
+  <button id="broadcastBtn">Broadcast: whoami</button>
+  <div id="clients"></div>
 
 <script>
-const evtSource = new EventSource("/stream");
-evtSource.onmessage = function(e) {
-  const data = JSON.parse(e.data);
-  const out = document.getElementById("output");
-  const clients = document.getElementById("clients");
-  const count = document.getElementById("count");
-  // Update clients list
-  if (data.type === "clients") {
-    // rebuild client list
-    const list = data.clients;
-    const select = document.getElementById("clientSelect");
-    select.innerHTML = '<option value="__broadcast">-- Broadcast to all --</option>';
-    clients.innerHTML = '';
-    for (const c of list) {
-      const li = document.createElement('li');
-      li.textContent = `${c.client_id} — ${c.hostname} — ${c.addr} — cwd:${c.cwd}`;
-      clients.appendChild(li);
-      const opt = document.createElement('option');
-      opt.value = c.client_id;
-      opt.text = `${c.hostname} (${c.client_id})`;
-      select.appendChild(opt);
-    }
-    count.textContent = list.length;
+const socket = io({transports:['websocket'], reconnection:true});
+socket.on('connect', () => console.log('connected to server'));
+socket.on('clients', (data) => {
+  const cdiv = document.getElementById('clients');
+  cdiv.innerHTML = '';
+  for (const c of data) {
+    const el = document.createElement('div');
+    el.className = 'client';
+    el.id = `client-${c.client_id}`;
+    el.innerHTML = `
+      <strong>${c.hostname || c.client_id}</strong> — ${c.addr} — cwd: ${c.cwd}<br/>
+      <div class="output" id="out-${c.client_id}"></div>
+      <div class="controls">
+        <input id="cmd-${c.client_id}" style="width:60%" placeholder="command (e.g. uptime or cd /tmp)"/>
+        <button onclick="sendCmd('${c.client_id}')">Send</button>
+        <button onclick="clearOut('${c.client_id}')">Clear</button>
+      </div>`;
+    cdiv.appendChild(el);
   }
-  // Output messages
-  if (data.type === "output") {
-    const t = document.createElement('div');
-    t.innerHTML = `<b>[${data.client_id} | ${data.hostname} | ${data.cwd}]</b>\n<pre>${data.text}</pre>\n<hr/>`;
-    out.prepend(t);
-  }
-  if (data.type === "info") {
-    const t = document.createElement('div');
-    t.textContent = `[INFO] ${data.msg}`;
-    out.prepend(t);
-  }
-};
+});
 
-document.getElementById('cmdForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const client = document.getElementById('clientSelect').value;
-  const cmd = document.getElementById('cmdInput').value.trim();
-  if (!cmd) return;
-  const resp = await fetch('/send', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({client, cmd})
-  });
-  document.getElementById('cmdInput').value = '';
+socket.on('output', (m) => {
+  const id = m.client_id;
+  const outEl = document.getElementById('out-' + id);
+  if (!outEl) return;
+  const header = `[${m.client_id} | ${m.hostname} | ${m.cwd}]`;
+  const text = m.text;
+  outEl.innerText = header + "\\n" + text + "\\n" + outEl.innerText;
+});
+
+function sendCmd(client_id) {
+  const val = document.getElementById('cmd-' + client_id).value.trim();
+  if (!val) return alert('empty');
+  socket.emit('send_cmd', { client: client_id, cmd: val });
+  document.getElementById('cmd-' + client_id).value = '';
+}
+
+function clearOut(client_id) {
+  const outEl = document.getElementById('out-' + client_id);
+  if (outEl) outEl.innerText = '';
+}
+
+document.getElementById('broadcastBtn').onclick = () => {
+  socket.emit('send_cmd', { client: '__broadcast', cmd: 'whoami' });
+};
+document.getElementById('refresh').onclick = () => {
+  socket.emit('request_clients');
 };
 </script>
+</body>
+</html>
 """
 
-########################
-# TCP Server Components
-########################
-
-def send_json(sock, obj):
-    """Send newline-delimited JSON."""
-    data = (json.dumps(obj) + "\n").encode()
-    sock.sendall(data)
-
-def client_reader_thread(client_id):
-    """Listens for incoming messages from a particular client socket."""
+# ----------------------
+# Helper functions
+# ----------------------
+def clients_list():
     with clients_lock:
-        entry = clients.get(client_id)
-    if not entry:
-        return
-    sock = entry['sock']
-    addr = entry['addr']
-    buffer = b""
-    try:
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buffer += chunk
-            while b"\n" in buffer:
-                line, _, buffer = buffer.partition(b"\n")
-                try:
-                    msg = json.loads(line.decode())
-                except Exception:
-                    continue
-                handle_client_message(client_id, msg)
-    except Exception as e:
-        pass
-    finally:
-        with clients_lock:
-            clients.pop(client_id, None)
-        output_events.put({"type":"info","msg":f"client {client_id} disconnected"})
-        broadcast_clients_state()
-
-def handle_client_message(client_id, msg):
-    """
-    Expected message types from client:
-     - { "type":"register", "hostname":"...", "cwd":"..." }
-     - { "type":"output", "output":"base64...", "cwd":"..." }
-    """
-    mtype = msg.get("type")
-    if mtype == "register":
-        with clients_lock:
-            if client_id in clients:
-                clients[client_id].update({
-                    'hostname': msg.get('hostname'),
-                    'cwd': msg.get('cwd', clients[client_id].get('cwd'))
-                })
-        broadcast_clients_state()
-        output_events.put({"type":"info","msg":f"client {client_id} registered: {msg.get('hostname')}"})
-    elif mtype == "output":
-        b64 = msg.get("output", "")
-        try:
-            raw = base64.b64decode(b64)
-            text = raw.decode(errors="replace")
-        except Exception:
-            text = "[decode error]"
-        hostname = msg.get("hostname", "")
-        cwd = msg.get("cwd", "")
-        output_events.put({"type":"output","client_id": client_id, "hostname": hostname, "cwd": cwd, "text": text})
-    elif mtype == "ping":
-        # ignore or update heartbeat
-        with clients_lock:
-            if client_id in clients:
-                clients[client_id]['last_seen'] = time.time()
-    else:
-        output_events.put({"type":"info","msg":f"unknown msg from {client_id}: {msg}"})
-
-def broadcast_clients_state():
-    """Put clients list into the SSE queue so frontend updates."""
-    with clients_lock:
-        lst = []
-        for cid, e in clients.items():
-            lst.append({
+        return [
+            {
                 "client_id": cid,
-                "hostname": e.get('hostname',''),
-                "addr": f"{e['addr'][0]}:{e['addr'][1]}",
-                "cwd": e.get('cwd','')
-            })
-    output_events.put({"type":"clients", "clients": lst})
+                "hostname": meta.get("hostname",""),
+                "addr": f"{meta.get('addr','')}",
+                "cwd": meta.get("cwd","")
+            } for cid, meta in clients.items()
+        ]
 
-def tcp_accept_loop():
-    """Accept loop for incoming client connections."""
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((HOST, PORT))
-    srv.listen(5)
-    print(f"TCP server listening on {HOST}:{PORT}")
-    while True:
-        conn, addr = srv.accept()
-        # create client id
-        client_id = str(uuid.uuid4())[:8]
-        entry = {
-            'sock': conn,
-            'addr': addr,
-            'hostname': '',
-            'cwd': '',
-            'queue': queue.Queue(),
-            'last_seen': time.time()
-        }
-        with clients_lock:
-            clients[client_id] = entry
-        # spawn a thread to read from client
-        t = threading.Thread(target=client_reader_thread, args=(client_id,), daemon=True)
-        t.start()
-        # spawn a thread to write to client from its queue
-        w = threading.Thread(target=client_writer_thread, args=(client_id,), daemon=True)
-        w.start()
-        output_events.put({"type":"info","msg":f"client connected {client_id} from {addr}"})
-        broadcast_clients_state()
+def broadcast_clients():
+    socketio.emit('clients', clients_list())
 
-def client_writer_thread(client_id):
-    """Send queued commands to client."""
-    while True:
-        with clients_lock:
-            entry = clients.get(client_id)
-        if not entry:
-            break
-        try:
-            cmd = entry['queue'].get()  # blocks
-            sock = entry['sock']
-            send_json(sock, cmd)
-        except Exception:
-            break
+# ----------------------
+# SocketIO events (web UI & clients)
+# ----------------------
 
-####################
-# Flask Endpoints
-####################
+@socketio.on('connect')
+def on_connect():
+    # UI and CLI both connect here. We just log.
+    print("Websocket connected:", request.sid)
 
-@app.route("/")
-def index():
-    return render_template_string(INDEX_HTML)
+@socketio.on('disconnect')
+def on_disconnect():
+    print("Websocket disconnected:", request.sid)
 
-@app.route("/send", methods=["POST"])
-def send_cmd():
-    """
-    JSON: { "client": "<client_id> or __broadcast", "cmd": "ls -la" }
-    """
-    data = request.get_json()
+@socketio.on('request_clients')
+def on_request_clients():
+    broadcast_clients()
+
+# Event to receive commands from UI; forward to client(s)
+@socketio.on('send_cmd')
+def handle_send_cmd(data):
     client = data.get('client')
     cmd = data.get('cmd','')
     if not cmd:
-        return {"ok": False, "error": "empty command"}, 400
-
-    sent_to = []
+        return
+    sent = []
     with clients_lock:
-        if client == "__broadcast":
-            for cid, entry in clients.items():
-                entry['queue'].put({"type":"cmd","cmd": cmd})
-                sent_to.append(cid)
+        if client == '__broadcast':
+            for cid, meta in clients.items():
+                socketio.emit('cmd', {"cmd": cmd}, room=cid)
+                sent.append(cid)
         else:
-            entry = clients.get(client)
-            if not entry:
-                return {"ok": False, "error": "client not found"}, 404
-            entry['queue'].put({"type":"cmd","cmd": cmd})
-            sent_to.append(client)
+            if client in clients:
+                socketio.emit('cmd', {"cmd": cmd}, room=client)
+                sent.append(client)
+    print("[INFO] sent command to:", sent)
+    broadcast_clients()
 
-    output_events.put({"type":"info","msg":f"sent command to: {', '.join(sent_to)}"})
-    return {"ok": True, "sent": sent_to}
+# ----------------------
+# Client (agent) side SocketIO handlers (from Python agents)
+# The Python client will connect and emit 'register' on connect.
+# ----------------------
 
-@app.route("/stream")
-def stream():
-    def event_stream():
-        # Send initial clients state
-        broadcast_clients_state()
-        while True:
-            try:
-                ev = output_events.get()
-                yield f"data: {json.dumps(ev)}\n\n"
-            except GeneratorExit:
-                break
-    return Response(event_stream(), mimetype="text/event-stream")
+@socketio.on('register')
+def on_register(data):
+    # data: { client_id, hostname, cwd, addr }
+    sid = request.sid
+    cid = data.get('client_id') or sid
+    with clients_lock:
+        clients[cid] = {
+            "sid": sid,
+            "hostname": data.get("hostname",""),
+            "cwd": data.get("cwd",""),
+            "addr": data.get("addr", ""),
+            "last_seen": time.time()
+        }
+    # put the socketio session in a room named after client_id so we can address it
+    join_room(cid)
+    print(f"[INFO] client registered: {cid} {data.get('hostname')} from {data.get('addr')}")
+    broadcast_clients()
 
-####################
-# Runner
-####################
+@socketio.on('output')
+def on_output(data):
+    # data: { client_id, hostname, cwd, output_base64 }
+    cid = data.get('client_id') or request.sid
+    try:
+        raw = base64.b64decode(data.get('output',''))
+        text = raw.decode(errors='replace')
+    except Exception:
+        text = "[decode error]"
+    # update client's cwd and hostname
+    with clients_lock:
+        if cid in clients:
+            clients[cid]['cwd'] = data.get('cwd', clients[cid].get('cwd'))
+            clients[cid]['hostname'] = data.get('hostname', clients[cid].get('hostname'))
+            clients[cid]['last_seen'] = time.time()
+    # push to web UI
+    socketio.emit('output', {
+        "client_id": cid,
+        "hostname": data.get('hostname',''),
+        "cwd": data.get('cwd',''),
+        "text": text
+    })
+    broadcast_clients()
+
+@socketio.on('client_ping')
+def on_client_ping(data):
+    cid = data.get('client_id') or request.sid
+    with clients_lock:
+        if cid in clients:
+            clients[cid]['last_seen'] = time.time()
+
+# Optional: cleanup thread to remove stale clients
+def cleanup_loop():
+    while True:
+        now = time.time()
+        removed = []
+        with clients_lock:
+            for cid, meta in list(clients.items()):
+                if now - meta.get('last_seen', 0) > 300:  # 5 min stale
+                    removed.append(cid)
+                    del clients[cid]
+        if removed:
+            print("[CLEANUP] removed stale clients:", removed)
+            socketio.emit('clients', clients_list())
+        time.sleep(60)
+
+# Flask route for UI
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
 
 if __name__ == "__main__":
-    # start TCP acceptor
-    t = threading.Thread(target=tcp_accept_loop, daemon=True)
+    # start cleanup thread
+    t = threading.Thread(target=cleanup_loop, daemon=True)
     t.start()
-    # start flask
-    app.run(host=FLASK_HOST, port=FLASK_PORT, threaded=True)
+    # run server (SocketIO + Flask) on FLASK_PORT
+    print(f"Starting server on {FLASK_HOST}:{FLASK_PORT}")
+    socketio.run(app, host=FLASK_HOST, port=FLASK_PORT, debug=False)
