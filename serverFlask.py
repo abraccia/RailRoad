@@ -8,26 +8,17 @@ Open UI: http://0.0.0.0:4444/
 from gevent import monkey
 monkey.patch_all()
 
-from flask import Flask
-from flask_socketio import SocketIO
-
-app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
-
-import base64
-import json
-import threading
-import time
-
+from flask import Flask, render_template_string, request
+from flask_socketio import SocketIO, join_room
+import base64, json, threading, time
 
 FLASK_HOST = "0.0.0.0"
 FLASK_PORT = 4444
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "dev-secret"  # change for long-term
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+app.config["SECRET_KEY"] = "dev-secret"
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="gevent")
 
-# clients: sid -> metadata
 clients = {}
 clients_lock = threading.Lock()
 
