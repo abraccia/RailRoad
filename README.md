@@ -20,6 +20,7 @@ chmod +x dist/client
 
 - go to drive and download file and upload it to github and edit the release
 
-# Run ansible by
+# Run ansible on server and then run server.py
 
 - ansible-playbook -i "[client IP,]" playbook.yml -u [user] -b -k -K
+- python server.py
