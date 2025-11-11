@@ -2,10 +2,6 @@
 
 Python Based C2 for Linux Red Team Competitiong
 
-# Create Binary using pyinstaller
-
-/distls
-
 # Give permissions
 
 chmod +x dist/client
