@@ -2,9 +2,7 @@
 
 Python Based C2 for Linux Red Team Competitiong
 
-# Give permissions
 
-chmod +x dist/client
 
 # Updating Instructions
 
@@ -13,6 +11,8 @@ chmod +x dist/client
 - use chmod + systemd-slve if testing locally
 
 - cd to the file in /dist and upload it to drive.
+
+- Give permissions with chmod +x dist/client
 
 - go to drive and download file and upload it to github and edit the release
 
