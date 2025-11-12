@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Comnect to server's IP and target Port
-SERVER = "192.168.200.197"  # Your server IP
+SERVER = "192.168.2.10"  # Your server IP
 PORT = 6769
 END_MARKER = b"\n--END--\n"
 
